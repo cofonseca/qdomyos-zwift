@@ -283,30 +283,37 @@ void proformwifibike::rebuildGearLadder() {
     qDebug() << "gear ladder size" << gearLadder.size();
 }
 
-// send the gear to the console if it changed
+// the console drops writes that come too close, so one at a time until it reports the gear we want
 void proformwifibike::syncGearsToConsole() {
     if (!consoleUsesGears || gearLadder.isEmpty())
         return;
     int idx = qBound(1, qRound(gears()), (int)gearLadder.size());
-    if (idx == lastSyncedLadderIndex)
+    if (idx != lastSyncedLadderIndex) {
+        lastSyncedLadderIndex = idx;
+        targetGearIndex = idx;
+        gearWriteTries = 0;
+    }
+    if (targetGearIndex == 0)
         return;
-    const ConsoleGear &g = gearLadder.at(idx - 1);
-    lastSyncedLadderIndex = idx;
-    pendingFrontGear = g.front;
-    pendingRearGear = g.rear;
+    const ConsoleGear &g = gearLadder.at(targetGearIndex - 1);
+    if (g.front == consoleFrontGear && g.rear == consoleRearGear) {
+        targetGearIndex = 0;
+        return;
+    }
+    if (gearWriteTime.isValid() && gearWriteTime.msecsTo(QDateTime::currentDateTime()) < 300)
+        return;
+    if (++gearWriteTries > 10) {
+        targetGearIndex = 0;
+        return;
+    }
+    QString send;
+    if (g.front != consoleFrontGear)
+        send = "{\"type\":\"set\",\"values\":{\"Front Gear\":\"" + QString::number(g.front) + "\"}}";
+    else
+        send = "{\"type\":\"set\",\"values\":{\"Rear Gear\":\"" + QString::number(g.rear) + "\"}}";
+    qDebug() << "syncGearsToConsole" << send;
+    websocket.sendTextMessage(send);
     gearWriteTime = QDateTime::currentDateTime();
-    if (g.front != consoleFrontGear) {
-        QString send = "{\"type\":\"set\",\"values\":{\"Front Gear\":\"" + QString::number(g.front) + "\"}}";
-        qDebug() << "syncGearsToConsole" << send;
-        websocket.sendTextMessage(send);
-        consoleFrontGear = g.front;
-    }
-    if (g.rear != consoleRearGear) {
-        QString send = "{\"type\":\"set\",\"values\":{\"Rear Gear\":\"" + QString::number(g.rear) + "\"}}";
-        qDebug() << "syncGearsToConsole" << send;
-        websocket.sendTextMessage(send);
-        consoleRearGear = g.rear;
-    }
 }
 
 // must be double because it's an inclination
@@ -656,11 +663,8 @@ void proformwifibike::characteristicChanged(const QString &newValue) {
             consoleRearGear = values[QStringLiteral("Rear Gear")].toString().toInt();
             changed = true;
         }
-        // while our own write is settling the console reports half-way gears, ignore them
-        bool waiting = pendingFrontGear > 0 && gearWriteTime.msecsTo(now) < 1500 &&
-                       (consoleFrontGear != pendingFrontGear || consoleRearGear != pendingRearGear);
-        if (changed && !waiting && !settings.value(QZSettings::zwift_erg, QZSettings::default_zwift_erg).toBool()) {
-            pendingFrontGear = 0;
+        // not while we are still moving the console to the gear qz asked for
+        if (changed && targetGearIndex == 0 && !settings.value(QZSettings::zwift_erg, QZSettings::default_zwift_erg).toBool()) {
             int idx = closestLadderIndex(gearLadder, frontTeeth, rearTeeth, consoleFrontGear, consoleRearGear);
             if (idx > 0 && qRound(gears()) != idx) {
                 qDebug() << "console gear changed" << consoleFrontGear << consoleRearGear << "-> qz gear" << idx;

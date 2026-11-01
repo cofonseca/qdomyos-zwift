@@ -111,8 +111,8 @@ class proformwifibike : public bike {
     int consoleFrontGear = 0;
     int consoleRearGear = 0;
     int lastSyncedLadderIndex = 0;
-    int pendingFrontGear = 0;
-    int pendingRearGear = 0;
+    int targetGearIndex = 0;
+    int gearWriteTries = 0;
     QDateTime gearWriteTime;
     void rebuildGearLadder();
     void syncGearsToConsole();
